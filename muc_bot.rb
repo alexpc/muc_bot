@@ -2,10 +2,11 @@
 # encoding: utf-8
 require 'rubygems'
 require 'singleton'
+require	'yaml'
 require 'xmpp4r'
 require 'xmpp4r/muc/helper/simplemucclient'
 
-if ARGV.size != 3
+unless File.exists? ('config.yml')
   puts "Usage: #{$0} <jid> <password> <room@conference/nick>"
   exit
 end
@@ -23,11 +24,12 @@ end
 class Connector
     include Singleton
     def initialize
-        @cl = Jabber::Client.new(Jabber::JID.new(ARGV[0]))
+		config = YAML::load(File.open('config.yml'))
+        @cl = Jabber::Client.new(Jabber::JID.new(config['jid']))
         @cl.connect
-        @cl.auth(ARGV[1])
+        @cl.auth(config['passwd'])
         @m = Jabber::MUC::SimpleMUCClient.new(@cl)
-        @m.join(ARGV[2])
+        @m.join(config['room']+'/'+config['nick'])
     end
     def muc
         return @m
@@ -42,7 +44,7 @@ class Logger
     def log(msg)
         @buffer += msg + "\n"
         if @buffer.length > 1
-            filename = Time.new.strftime('%Y-%m-%d_log.txt')
+            filename = Time.new.strftime('logs/%Y-%m-%d_log.txt')
             aFile = File.new(filename, "a")
             aFile.write(@buffer)
             aFile.close
@@ -54,10 +56,6 @@ end
 
 begin
 #Jabber::debug = true
-#cl = Jabber::Client.new(Jabber::JID.new(ARGV[0]))
-#cl.connect
-#cl.auth(ARGV[1])
-
 
 # This is the SimpleMUCClient helper!
 m = Connector.instance.muc
