@@ -1,0 +1,4 @@
+jid:    login@jabberserver.com
+passwd: yourpassword
+room:   chatroom@conference.jabberserver.com
+nick:   MUC_Bot
