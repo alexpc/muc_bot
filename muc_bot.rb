@@ -3,11 +3,14 @@
 require 'rubygems'
 require 'singleton'
 require	'yaml'
+require	'sqlite3'
 require 'xmpp4r'
 require 'xmpp4r/muc/helper/simplemucclient'
+require 'net/http'
+require 'xmlsimple'
 
 unless File.exists? ('config.yml')
-  puts "Usage: #{$0} <jid> <password> <room@conference/nick>"
+  puts "Cannot find config.yml file. Tried using sample_config.yml?"
   exit
 end
 
@@ -31,6 +34,9 @@ class Connector
         @m = Jabber::MUC::SimpleMUCClient.new(@cl)
         @m.join(config['room']+'/'+config['nick'])
     end
+	def close
+		@cl.close
+	end
     def muc
         return @m
     end
@@ -44,16 +50,62 @@ class Logger
     def log(msg)
         @buffer += msg + "\n"
         if @buffer.length > 1
-            filename = Time.new.strftime('logs/%Y-%m-%d_log.txt')
-            aFile = File.new(filename, "a")
-            aFile.write(@buffer)
-            aFile.close
-            @buffer = ''
+			self.save
         end
     end
+	def save()
+        filename = Time.new.strftime('logs/%Y-%m-%d_log.txt')
+		aFile = File.new(filename, "a")
+        aFile.write(@buffer)
+        aFile.close
+        @buffer = ''
+		puts "Log saved in file #{filename}"
+	end
 end
 
+class DbPool
+	include Singleton
+	def initialize
+		@db = SQLite3::Database.new( "sql/db.sl3" )
+	end
+	def db
+		return @db
+	end
+end
+class User
+#	include Singleton
+	def initialize
+		@db = DbPool.instance.db
+	end
+	def login(nick)
+		columns, *rows = db.execute2( "select * from users where nick = ?",nick)
+		if rows.empty?
+			db.execute("insert into users (nick,last_logged) values (?,?)",nick,Time.new.to_i)
+		else
+			db.execute("update users SET last_logged=? WHERE nick=?",Time.new.to_i,nick)
+		end
+	end
+	def log(nick,text)
+		db.execute("update users SET total_lines = total_lines+1,total_letters = total_letters + ? WHERE nick=?",text.length,nick)
+	end
+end
 
+class Weather
+	include Singleton
+	def initialize
+		@WeatherRSS = 'http://rss.wunderground.com/auto/rss_full/global/stations/12372.xml'
+		@last_update = 0
+		#@morning_range = 
+		@day_range = (6..21)
+	end
+	def check
+		update_after = (30 + rand(30) ) * 60
+		return last_update + update_after <= Time.new
+	end
+	def update
+		
+	end
+end
 begin
 #Jabber::debug = true
 
@@ -63,14 +115,22 @@ logger = Logger.instance
 # For waking up...
 mainthread = Thread.current
 
-eventrunner = Thread.new{
-	sleep(0.1) while mainthread.status!='sleep'
-	begin
-		m.say( "Mamy godzinę " + Time.new.strftime("%H:%M:%S"))
-		sleep(60)
-	end while 1==1
+alivekeeper = Thread.new{
+	sleep(1) while mainthread.status!='sleep'
+	loop do
+		m.get_room_configuration() 
+		sleep(600)
+		puts "Keeping alive (getting room config, saving buffer)"
+		logger.save
+	end
 }
-
+eventrunner = Thread.new{
+	sleep(1) while mainthread.status!='sleep'
+	loop do
+		sleep(3600)
+		puts "Event execution"
+	end
+}
 
 
 # SimpleMUCClient callback-blocks
@@ -85,11 +145,19 @@ m.on_leave { |time,nick|
 }
 m.on_private_message{ |time,nick,text|
 	print_line time, "<#{nick}> #{text}"
-	if text.strip =~ /^rzu[cćt] (\d*)k(\d+)/i
+	if text.strip =~ /^rzu[cćt] (\d*)k(\d+)([+-]\d+)?/i
 		l_kosci = $1.to_i > 1 ? $1.to_i : 1
 		w_kosci = $2.to_i > 1 ? $2.to_i : 6
+		b_kosci = $3.to_i
 		sleep(0.5)
-		m.say("Rzut #{l_kosci}k#{w_kosci}: #{l_kosci*(rand(w_kosci)+1)}",nick) 
+		wynik = 0;
+		l_kosci.times { wynik += rand(w_kosci)+1 }
+		wynik += b_kosci
+		m.say("Rzut #{l_kosci}k#{w_kosci}#{$3}: #{wynik}",nick) 
+	elsif text.strip =~ /^exit$/
+		puts "exiting"
+		m.exit
+		mainthread.wakeup
 	end
 }
 m.on_message { |time,nick,text|
@@ -118,9 +186,9 @@ m.on_message { |time,nick,text|
 			end
 		else
 			if text.include? '\me'
-				logger.log("[#{Time.new.strftime('%I:%M')}] #{text.gsub("\me",nick)}")
+				logger.log("[#{Time.new.strftime('%H:%M')}] #{text.gsub("\me",nick)}")
 		    else
-				logger.log("[#{Time.new.strftime('%I:%M')}] <#{nick}>: #{text}")
+				logger.log("[#{Time.new.strftime('%H:%M')}] <#{nick}> #{text}")
 		    end
 		end
 	end
@@ -129,19 +197,23 @@ m.on_room_message { |time,text|
   print_line time, "- #{text}"
 }
 m.on_subject { |time,nick,subject|
-  print_line time, "*** (#{nick}) #{subject}"
+  print_line time, "** (#{nick}) #{subject}"
+  logger.log("** #{subject}")
 }
-
-
-
 
 
 # Wait for being waken up by m.on_message
 Thread.stop
 
+puts "Closing running threads"
+eventrunner.exit
+alivekeeper.exit
 
+puts "Closing connection to server"
+Connector.instance.close
 
-cl.close
+puts "Forcing log save"
+logger.save
 
 rescue Exception => e
 	puts e.backtrace
