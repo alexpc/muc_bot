@@ -73,20 +73,24 @@ class DbPool
 	end
 end
 class User
-#	include Singleton
+	include Singleton
 	def initialize
 		@db = DbPool.instance.db
 	end
 	def login(nick)
-		columns, *rows = db.execute2( "select * from users where nick = ?",nick)
+		columns, *rows = @db.execute2( "select * from users where nick = ?",nick)
 		if rows.empty?
-			db.execute("insert into users (nick,last_logged) values (?,?)",nick,Time.new.to_i)
+			@db.execute("insert into users (nick,role,total_lines,total_letters,last_logged) values (?,?,?,?,?)",nick,'player',0,0,Time.new.to_i.to_s)
 		else
-			db.execute("update users SET last_logged=? WHERE nick=?",Time.new.to_i,nick)
+			@db.execute("update users SET last_logged=? WHERE nick=?",Time.new.to_i.to_s,nick)
 		end
+		rescue Exception => e
+			puts e.backtrace
+		end
+
 	end
 	def log(nick,text)
-		db.execute("update users SET total_lines = total_lines+1,total_letters = total_letters + ? WHERE nick=?",text.length,nick)
+		@db.execute("update users SET total_lines = total_lines+1,total_letters = total_letters + ? WHERE nick=?",text.length,nick)
 	end
 end
 
@@ -112,6 +116,8 @@ begin
 # This is the SimpleMUCClient helper!
 m = Connector.instance.muc
 logger = Logger.instance
+#user = User.instance
+#db = DbPool.instance.db
 # For waking up...
 mainthread = Thread.current
 
@@ -138,6 +144,7 @@ m.on_join { |time,nick|
 	print_line time, "#{nick} has joined!"
 	puts "Users: " + m.roster.keys.join(', ')
 	logger.log("@@ #{nick} dołączył do pokoju!")
+	User.instance.login(nick)
 }
 m.on_leave { |time,nick|
 	print_line time, "#{nick} has left!"
@@ -190,6 +197,7 @@ m.on_message { |time,nick,text|
 		    else
 				logger.log("[#{Time.new.strftime('%H:%M')}] <#{nick}> #{text}")
 		    end
+			User.instance.log(nick,text)
 		end
 	end
 }
@@ -216,5 +224,6 @@ puts "Forcing log save"
 logger.save
 
 rescue Exception => e
+	puts $!
 	puts e.backtrace
 end
